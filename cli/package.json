@@ -1,0 +1,49 @@
+{
+  "name": "proskills-cli",
+  "version": "0.1.0",
+  "description": "Install ProSkills agent skills in one command and scan any SKILL.md folder in CI.",
+  "keywords": [
+    "agent-skills",
+    "skill.md",
+    "claude-code",
+    "cursor",
+    "codex",
+    "gemini-cli",
+    "cli"
+  ],
+  "homepage": "https://proskills.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yungprimer/proskills.git",
+    "directory": "cli"
+  },
+  "bugs": {
+    "url": "https://github.com/yungprimer/proskills/issues"
+  },
+  "author": "ProSkills (https://proskills.dev)",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "proskills": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "prebuild": "node scripts/copy-scan.mjs",
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test test/cli.test.mjs",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "dependencies": {
+    "jszip": "^3.10.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "typescript": "^5"
+  }
+}
