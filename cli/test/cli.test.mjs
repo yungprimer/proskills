@@ -1,14 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import JSZip from "jszip";
 import { parseCli, run } from "../dist/cli.js";
 import { pickAgents, resolveTargets, safeRelPath, insideRoot } from "../dist/paths.js";
 import { readSkills } from "../dist/api.js";
+import { compareSemver, installedVersion } from "../dist/update.js";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 // Runs in the site repo (packages/cli, skills in premium-skills/) and in the
@@ -262,4 +263,158 @@ test("scan --badge: prints the markdown snippet with the lowest score", () => {
 test("scan --badge --json: badge is a field, output stays valid JSON", () => {
   const j = JSON.parse(scan([GOOD, "--json", "--badge"]).stdout);
   assert.match(j.badge, /^\[!\[Scanned by ProSkills\]\(https:\/\/proskills\.dev\/badge\?score=\d+\)\]\(https:\/\/proskills\.dev\/scan\)$/);
+});
+
+// ---- update ----
+
+const LOG = (...vs) => "# Changelog\n\n" + vs.map(([v, n]) => `## ${v} · 2026-10-16\n\n- ${n}\n`).join("\n");
+const ORDER = "cs_test_abcdefghij1234";
+
+/** Catalog + zip server for update tests. `versions` maps id -> catalog version; `zips` maps id -> files. */
+function updateFetch({ versions, zips = {}, paid = [] }) {
+  const f = async (url, init = {}) => {
+    if (String(url).endsWith("/api/catalog")) {
+      const skills = Object.entries(versions).map(([id, version]) => ({ id, slug: id, name: id, line: "x", price: paid.includes(id) ? 9 : 0, free: !paid.includes(id), quality: null, ...(version ? { version } : {}) }));
+      return Response.json({ skills, collections: [] });
+    }
+    if (String(url).endsWith("/api/download")) {
+      const body = JSON.parse(init.body);
+      f.bodies.push(body);
+      return new Response(await zipOf(zips[body.skills[0]]), { headers: { "Content-Type": "application/zip" } });
+    }
+    return new Response("nope", { status: 404 });
+  };
+  f.bodies = [];
+  return f;
+}
+
+function seed(cwd, id, files, dir = ".claude/skills") {
+  for (const [name, content] of Object.entries({ "SKILL.md": "old", ...files })) {
+    const p = join(cwd, dir, id, name);
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, content);
+  }
+}
+
+const NEW_FILES = { "SKILL.md": "new", "CHANGELOG.md": LOG(["1.1.0", "faster"], ["1.0.0", "first"]), "profile.md": "shipped" };
+
+test("compareSemver orders versions, prereleases first", () => {
+  assert.equal(compareSemver("1.0.0", "1.0.0"), 0);
+  assert.equal(compareSemver("1.2.0", "1.10.0"), -1);
+  assert.equal(compareSemver("2.0.0", "1.99.99"), 1);
+  assert.equal(compareSemver("1.0.0-beta.1", "1.0.0"), -1);
+  assert.equal(compareSemver("1.0.0-beta.2", "1.0.0-beta.10"), -1);
+  assert.equal(compareSemver("0.0.0", "0.0.1"), -1);
+});
+
+test("update: outdated skill is replaced, profile.md kept, stale files removed, notes printed", async () => {
+  const h = harness();
+  seed(h.cwd, "humanizer", { "CHANGELOG.md": LOG(["1.0.0", "first"]), "profile.md": "mine", "stale.md": "x" });
+  h.io.fetch = updateFetch({ versions: { humanizer: "1.1.0" }, zips: { humanizer: { ...NEW_FILES, "references/a.md": "a" } } });
+  assert.equal(await run(["update"], h.io), 0);
+  const dir = join(h.cwd, ".claude/skills/humanizer");
+  assert.equal(readFileSync(join(dir, "SKILL.md"), "utf8"), "new");
+  assert.equal(readFileSync(join(dir, "profile.md"), "utf8"), "mine");
+  assert.equal(readFileSync(join(dir, "references/a.md"), "utf8"), "a");
+  assert.equal(existsSync(join(dir, "stale.md")), false);
+  assert.deepEqual(readdirSync(join(h.cwd, ".claude/skills")), ["humanizer"]);
+  const out = h.out.join("\n");
+  assert.match(out, /humanizer 1\.0\.0 → 1\.1\.0 \(\.claude\/skills\)/);
+  assert.match(out, /- faster/);
+  assert.doesNotMatch(out, /- first/);
+});
+
+test("update: up-to-date skill is untouched and not downloaded", async () => {
+  const h = harness();
+  seed(h.cwd, "humanizer", { "CHANGELOG.md": LOG(["1.1.0", "x"]) });
+  const f = updateFetch({ versions: { humanizer: "1.1.0" }, zips: { humanizer: NEW_FILES } });
+  h.io.fetch = f;
+  assert.equal(await run(["update"], h.io), 0);
+  assert.equal(readFileSync(join(h.cwd, ".claude/skills/humanizer/SKILL.md"), "utf8"), "old");
+  assert.equal(f.bodies.length, 0);
+  assert.match(h.out.join("\n"), /up to date/);
+});
+
+test("update --check: exit 1 and a table when outdated, 0 when current, nothing written", async () => {
+  const h = harness();
+  seed(h.cwd, "humanizer", { "CHANGELOG.md": LOG(["1.0.0", "x"]) });
+  const f = updateFetch({ versions: { humanizer: "1.1.0" }, zips: { humanizer: NEW_FILES } });
+  h.io.fetch = f;
+  assert.equal(await run(["update", "--check"], h.io), 1);
+  assert.match(h.out.join("\n"), /humanizer\s+\.claude\/skills\s+1\.0\.0\s+1\.1\.0\s+outdated/);
+  assert.equal(f.bodies.length, 0);
+  assert.equal(readFileSync(join(h.cwd, ".claude/skills/humanizer/SKILL.md"), "utf8"), "old");
+  const ok = harness({ cwd: h.cwd });
+  ok.io.fetch = updateFetch({ versions: { humanizer: "1.0.0" } });
+  assert.equal(await run(["update", "--check"], ok.io), 0);
+});
+
+test("update --json is machine readable", async () => {
+  const h = harness();
+  seed(h.cwd, "humanizer", { "CHANGELOG.md": LOG(["1.0.0", "x"]) });
+  h.io.fetch = updateFetch({ versions: { humanizer: "1.1.0" } });
+  assert.equal(await run(["update", "--check", "--json"], h.io), 1);
+  const j = JSON.parse(h.out.join("\n"));
+  assert.equal(j.ok, false);
+  assert.deepEqual([j.skills[0].id, j.skills[0].installed, j.skills[0].latest, j.skills[0].status], ["humanizer", "1.0.0", "1.1.0", "outdated"]);
+});
+
+test("update: outdated paid skill without an order is skipped with a hint; with an order it updates", async () => {
+  const h = harness();
+  seed(h.cwd, "pro", { "CHANGELOG.md": LOG(["1.0.0", "x"]) });
+  const f = updateFetch({ versions: { pro: "1.1.0" }, paid: ["pro"], zips: { pro: NEW_FILES } });
+  h.io.fetch = f;
+  assert.equal(await run(["update"], h.io), 0);
+  assert.match(h.out.join("\n"), /--order/);
+  assert.equal(f.bodies.length, 0);
+  assert.equal(readFileSync(join(h.cwd, ".claude/skills/pro/SKILL.md"), "utf8"), "old");
+
+  const again = harness({ cwd: h.cwd, env: { PROSKILLS_ORDER: ORDER } });
+  again.io.fetch = f;
+  assert.equal(await run(["update"], again.io), 0);
+  assert.equal(f.bodies[0].order, ORDER);
+  assert.equal(readFileSync(join(h.cwd, ".claude/skills/pro/SKILL.md"), "utf8"), "new");
+});
+
+test("update: a folder without CHANGELOG.md counts as 0.0.0 and is updated; catalog without version is skipped", async () => {
+  const h = harness();
+  seed(h.cwd, "humanizer", {});
+  seed(h.cwd, "grill-me", {});
+  h.io.fetch = updateFetch({ versions: { humanizer: "1.0.0", "grill-me": null }, zips: { humanizer: { "SKILL.md": "new", "CHANGELOG.md": LOG(["1.0.0", "first"]) } } });
+  assert.equal(installedVersion(join(h.cwd, ".claude/skills/humanizer")), "0.0.0");
+  assert.equal(await run(["update"], h.io), 0);
+  const out = h.out.join("\n");
+  assert.match(out, /humanizer 0\.0\.0 → 1\.0\.0/);
+  assert.match(out, /grill-me .*skipped/);
+  assert.equal(readFileSync(join(h.cwd, ".claude/skills/grill-me/SKILL.md"), "utf8"), "old");
+  assert.equal(installedVersion(join(h.cwd, ".claude/skills/humanizer")), "1.0.0");
+});
+
+test("update: a malicious zip is rejected and the old skill stays intact", async () => {
+  const h = harness();
+  seed(h.cwd, "humanizer", { "profile.md": "mine" });
+  h.io.fetch = updateFetch({ versions: { humanizer: "1.0.0" }, zips: { humanizer: { "SKILL.md": "new", "../../escape.txt": "x" } } });
+  assert.equal(await run(["update"], h.io), 1);
+  assert.match(h.out.join("\n"), /Unsafe path/);
+  assert.equal(readFileSync(join(h.cwd, ".claude/skills/humanizer/SKILL.md"), "utf8"), "old");
+  assert.equal(readFileSync(join(h.cwd, ".claude/skills/humanizer/profile.md"), "utf8"), "mine");
+  assert.equal(existsSync(join(h.cwd, "escape.txt")), false);
+  assert.deepEqual(readdirSync(join(h.cwd, ".claude/skills")), ["humanizer"]);
+});
+
+test("update: limits to named ids and checks every agent folder", async () => {
+  const h = harness();
+  seed(h.cwd, "humanizer", {}, ".claude/skills");
+  seed(h.cwd, "humanizer", {}, ".agents/skills");
+  seed(h.cwd, "grill-me", {}, ".claude/skills");
+  h.io.fetch = updateFetch({ versions: { humanizer: "1.0.0", "grill-me": "1.0.0" }, zips: { humanizer: NEW_FILES } });
+  assert.equal(await run(["update", "--check", "--json"], h.io), 1);
+  assert.equal(JSON.parse(h.out.join("\n")).skills.length, 3);
+  const one = harness({ cwd: h.cwd });
+  one.io.fetch = updateFetch({ versions: { humanizer: "1.0.0", "grill-me": "1.0.0" }, zips: { humanizer: NEW_FILES } });
+  assert.equal(await run(["update", "humanizer", "--json"], one.io), 0);
+  const j = JSON.parse(one.out.join("\n"));
+  assert.deepEqual(j.skills.map((s) => [s.id, s.status]), [["humanizer", "updated"], ["humanizer", "updated"]]);
+  assert.equal(readFileSync(join(h.cwd, ".agents/skills/humanizer/SKILL.md"), "utf8"), "new");
+  assert.equal(readFileSync(join(h.cwd, ".claude/skills/grill-me/SKILL.md"), "utf8"), "old");
 });

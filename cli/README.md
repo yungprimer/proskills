@@ -12,6 +12,7 @@ No install needed:
 npx proskills-cli list                      # every skill, price and scan score
 npx proskills-cli add humanizer             # install a free skill into this project
 npx proskills-cli add grill-me hook-lab     # several at once
+npx proskills-cli update                    # bring installed skills up to the latest version
 npx proskills-cli scan                      # score the skills already in this repo
 ```
 
@@ -33,6 +34,40 @@ Prints a table of skills with price (or `Free`) and scan score.
 | `--answers file.json` | Send your saved answers so `profile.md` is filled in. Optional. |
 
 Paid skill without an order id: the command stops and prints the link to buy it (`https://proskills.dev/library/<collection>`).
+
+### Keep skills up to date
+
+Skills carry a version. `proskills update` compares each installed skill with the catalog and replaces the outdated ones.
+
+```sh
+npx proskills-cli update                    # update everything installed in this project
+npx proskills-cli update humanizer          # just one skill
+npx proskills-cli update --global           # skills in your home folder
+npx proskills-cli update --check            # list outdated skills, change nothing
+```
+
+| Flag | Meaning |
+|---|---|
+| `[skill-id...]` | Only these skills. Default: every installed ProSkills skill. |
+| `--agent claude\|cursor\|codex\|gemini\|all` | Which agent folders to look in. Default: all of them. |
+| `--global`, `--dir <path>` | Same as for `add`. |
+| `--order <id>` | Order id from your receipt (or env `PROSKILLS_ORDER`). An outdated paid skill without one is skipped, with a message. |
+| `--check` | Print a table (skill, folder, installed, latest, status) and exit `1` if anything is outdated, `0` otherwise. Nothing is downloaded or written. |
+| `--json` | Machine-readable result. |
+
+The installed version is the first `## <version> · <date>` heading in the skill's `CHANGELOG.md`. A folder without one (installed before versioning) counts as `0.0.0`. Your `profile.md` is never touched; files the new version no longer ships are removed. The new version is unpacked next to the old one and swapped in only when the download is complete and every path is safe, so a failed update leaves the old skill intact. After each update it prints the changelog notes between your version and the new one:
+
+```
+pr-reviewer 1.0.0 → 1.1.0 (.claude/skills)
+  1.1.0 · 2026-10-20
+    - note
+```
+
+Fail a CI job when a skill is behind:
+
+```yaml
+      - run: npx proskills-cli update --check
+```
 
 ### `proskills scan [paths...] [--min 80] [--json] [--badge]`
 

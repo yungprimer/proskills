@@ -5,6 +5,7 @@ import { parseArgs } from "node:util";
 import { CliError, fetchCatalog, type Answers, type FetchFn } from "./api.js";
 import { install } from "./install.js";
 import { pickAgents, resolveTargets } from "./paths.js";
+import { update } from "./update.js";
 import { DEFAULT_SCAN_DIRS, badgeMarkdown, isFailing, scanDirs } from "./scancmd.js";
 
 export const DEFAULT_BASE = "https://proskills.dev";
@@ -15,12 +16,16 @@ Usage
   proskills list [--collection <slug>]
   proskills add <skill-id...> [--agent claude|cursor|codex|gemini|all] [--global]
                 [--order <id>] [--dir <path>] [--force] [--answers file.json]
+  proskills update [skill-id...] [--agent claude|cursor|codex|gemini|all] [--global]
+                   [--dir <path>] [--order <id>] [--check] [--json]
   proskills scan [paths...] [--min 80] [--json] [--badge]
 
 Options
   --base <url>   Another host (default ${DEFAULT_BASE}, or env PROSKILLS_URL)
   --order <id>   Order id from your receipt (or env PROSKILLS_ORDER)
   --dir <path>   Base folder instead of the current one (home folder with --global)
+  --check        With update: only list outdated skills, exit 1 if any (for CI)
+  --json         Machine-readable output (scan, update)
   --badge        After a scan, print a README badge snippet using the lowest score
                  across the scanned skills (with --json: a "badge" field)
   --help         Show this help
@@ -46,6 +51,7 @@ const OPTIONS = {
   min: { type: "string" },
   json: { type: "boolean" },
   badge: { type: "boolean" },
+  check: { type: "boolean" },
 } as const;
 
 export function parseCli(argv: string[]) {
@@ -146,6 +152,60 @@ export async function run(argv: string[], io: Env): Promise<number> {
       }
       io.out("\nRestart your agent (or start a new session) to load the skill.");
       return 0;
+    }
+
+    if (command === "update") {
+      const global = !!values.global;
+      const baseDir = resolve(io.cwd, values.dir ?? (global ? io.home : "."));
+      let agents;
+      try {
+        agents = pickAgents(values.agent ?? "all", baseDir, global);
+      } catch (e) {
+        throw new CliError((e as Error).message, 2);
+      }
+      const targets = resolveTargets(agents, baseDir, global);
+      const order = values.order ?? io.env.PROSKILLS_ORDER ?? undefined;
+      const catalog = await fetchCatalog(io.fetch, base, io.version);
+      const show = (t: { dir: string }) => {
+        const rel = relative(io.cwd, t.dir);
+        return (rel && !rel.startsWith("..") && !isAbsolute(rel) ? rel : t.dir).replace(/\\/g, "/");
+      };
+      const check = !!values.check;
+      const rows = await update({ ids: args, catalog, base, version: io.version, fetch: io.fetch, targets, order: order || undefined, check, show: (t) => show(t) });
+      const outdated = rows.filter((r) => r.status === "outdated");
+      const failed = rows.filter((r) => r.status === "failed");
+      const code = check ? (outdated.length ? 1 : 0) : failed.length ? 1 : 0;
+      if (values.json) {
+        io.out(JSON.stringify({ check, ok: code === 0, skills: rows.map((r) => ({ id: r.id, agent: r.agent, dir: r.dir.replace(/\\/g, "/"), installed: r.installed, latest: r.latest, status: r.status, ...(r.message ? { message: r.message } : {}), ...(r.changes ? { changes: r.changes } : {}) })) }, null, 2));
+        return code;
+      }
+      if (!rows.length) {
+        io.out(args.length ? `None of the given skills are installed in ${targets.map(show).join(" or ")}.` : `No ProSkills skills found in ${targets.map(show).join(", ")}. Install one with: npx proskills-cli add <id>`);
+        return 0;
+      }
+      if (check) {
+        io.out(table([["SKILL", "DIR", "INSTALLED", "LATEST", "STATUS"], ...rows.map((r) => [r.id, r.agent, r.installed, r.latest ?? "?", r.status])]));
+        for (const r of rows) if (r.message) io.out(`  ${r.id} (${r.agent}): ${r.message}`);
+        io.out(outdated.length ? `\n${outdated.length} outdated. Run: npx proskills-cli update` : "\nAll installed skills are up to date.");
+        return code;
+      }
+      for (const r of rows) {
+        if (r.status === "updated") {
+          io.out(`${r.id} ${r.installed} → ${r.latest} (${r.agent})`);
+          for (const e of r.changes ?? []) {
+            io.out(`  ${e.version}${e.date ? " · " + e.date : ""}`);
+            for (const n of e.notes) io.out(`    - ${n}`);
+          }
+        } else if (r.status === "up-to-date") {
+          io.out(`${r.id} ${r.installed} is up to date (${r.agent})`);
+        } else {
+          io.out(`${r.id} (${r.agent}): ${r.status}, ${r.message}`);
+        }
+      }
+      const n = rows.filter((r) => r.status === "updated").length;
+      io.out(`\n${n} updated, ${rows.filter((r) => r.status === "up-to-date").length} up to date, ${rows.filter((r) => r.status === "skipped" || r.status === "unknown").length} skipped, ${failed.length} failed.`);
+      if (n) io.out("Restart your agent (or start a new session) to load the changes. profile.md was kept.");
+      return code;
     }
 
     if (command === "scan") {

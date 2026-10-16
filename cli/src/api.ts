@@ -9,6 +9,8 @@ export type CatalogSkill = {
   price: number;
   free: boolean;
   quality: { score: number; grade: string } | null;
+  /** Semver of the current release. Older servers omit it. */
+  version?: string;
 };
 export type CatalogCollection = { slug: string; name: string; bundle: number };
 export type Catalog = { skills: CatalogSkill[]; collections: CatalogCollection[] };
