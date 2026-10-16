@@ -105,7 +105,7 @@ const SECURITY: Pattern[] = [
   { rule: "sec/obfuscation", severity: "warn", cost: 6, re: /[A-Za-z0-9+/]{120,}={0,2}/, message: "Long encoded blob; reviewers can't read what it does." },
   { rule: "sec/fake-prerequisite", severity: "critical", cost: 25, re: /\b(download|install|run)\b[^\n]{0,60}\bhttps?:\/\/[^\s)]+\.(dmg|pkg|exe|msi|zip|tar\.gz|sh|ps1|bin|AppImage)\b/i, message: "Tells the user or agent to fetch and run a binary, the pattern behind the ClawHavoc malware campaign." },
   { rule: "sec/remote-instructions", severity: "warn", cost: 10, re: /\b(fetch|download|curl|read|load|get)\b[^\n]{0,40}\bhttps?:\/\/[^\s)]+[^\n]{0,60}\b(follow|apply|execute|obey)\b[^\n]{0,20}\b(instructions|rules|steps|prompt)/i, message: "Pulls instructions from a URL at runtime, so the skill can change after it was reviewed." },
-  { rule: "sec/persistence", severity: "warn", cost: 10, re: /\b(crontab|launchctl|systemctl\s+enable|schtasks|reg\s+add|\.bashrc|\.zshrc|\.profile|settings\.json.*hooks|Startup folder)\b/i, message: "Installs persistence or edits shell/agent config." },
+  { rule: "sec/persistence", severity: "warn", cost: 10, re: /\b(crontab|launchctl|systemctl\s+enable|schtasks|reg\s+add|settings\.json.*hooks|Startup folder)\b|\.(bashrc|zshrc|bash_profile|profile)(?!\.?\w)/i, message: "Installs persistence or edits shell/agent config." },
   { rule: "sec/permissions", severity: "warn", cost: 8, re: /--dangerously-skip-permissions|bypassPermissions|allowed-tools:\s*["']?\*|chmod\s+(-R\s+)?777|\bsudo\b/i, message: "Escalates permissions." },
 ];
 
@@ -191,6 +191,9 @@ export function scanSkill(input: SkillFile[] | string): ScanReport {
   const present = new Set(others.map((f) => rel(f.path)));
   const refRe = /(?:\]\(|`)((?:\.\/)?(?:[\w.-]+\/)*[\w.-]+\.(?:md|py|sh|js|mjs|ts|json|ya?ml|txt|csv|html))(?:\)|`)/g;
   const referenced = new Set<string>();
+  // profile.md holds the user's answers: the skill creates it if missing, so it
+  // is never required, and any mention in SKILL.md (frontmatter too) counts.
+  if (/\bprofile\.md\b/.test(skill.content)) referenced.add("profile.md");
   for (const m of body.matchAll(refRe)) {
     const p = m[1].replace(/^\.\//, "");
     if (p === "SKILL.md" || p === "profile.md" || /^(package|tsconfig)\.json$/.test(p)) continue;
