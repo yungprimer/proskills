@@ -48,3 +48,9 @@ export function scanDirs(roots: string[], cwd: string): ScanResult[] {
 export function isFailing(r: ScanResult, min: number): boolean {
   return r.report.grade === "F" || r.report.score < min;
 }
+
+/** README badge for a scan. Uses the lowest score, so one weak skill cannot hide behind a strong one. */
+export function badgeMarkdown(scores: number[]): string {
+  const score = Math.max(0, Math.min(100, Math.round(Math.min(...scores))));
+  return `[![Scanned by ProSkills](https://proskills.dev/badge?score=${score})](https://proskills.dev/scan)`;
+}

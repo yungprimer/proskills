@@ -249,3 +249,17 @@ test("scan: no skills found exits 2; a folder of skills scans each", () => {
   const many = scan([SKILLS, "--json"]);
   assert.ok(JSON.parse(many.stdout).skills.length > 5);
 });
+
+test("scan --badge: prints the markdown snippet with the lowest score", () => {
+  const r = scan([GOOD, "--badge"]);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const low = JSON.parse(scan([SKILLS, "--json"]).stdout).skills.reduce((m, s) => Math.min(m, s.score), 100);
+  const many = scan([SKILLS, "--badge"]);
+  assert.ok(many.stdout.includes(`[![Scanned by ProSkills](https://proskills.dev/badge?score=${low})](https://proskills.dev/scan)`), many.stdout.slice(-300));
+  assert.doesNotMatch(scan([GOOD]).stdout, /Scanned by ProSkills/);
+});
+
+test("scan --badge --json: badge is a field, output stays valid JSON", () => {
+  const j = JSON.parse(scan([GOOD, "--json", "--badge"]).stdout);
+  assert.match(j.badge, /^\[!\[Scanned by ProSkills\]\(https:\/\/proskills\.dev\/badge\?score=\d+\)\]\(https:\/\/proskills\.dev\/scan\)$/);
+});

@@ -1,0 +1,44 @@
+name: Scan agent skills
+description: Score SKILL.md folders for spec compliance, token cost, clarity and security with the ProSkills scanner, and fail the job below your bar.
+author: ProSkills
+branding:
+  icon: shield
+  color: green
+inputs:
+  paths:
+    description: Skill folders, or folders of skill folders, separated by spaces.
+    required: false
+    default: ".claude/skills .agents/skills"
+  min:
+    description: Lowest passing score from 0 to 100. A critical finding (grade F) always fails.
+    required: false
+    default: "80"
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: "20"
+    - name: Scan skills
+      shell: bash
+      env:
+        SCAN_PATHS: ${{ inputs.paths }}
+        SCAN_MIN: ${{ inputs.min }}
+      run: |
+        set -o pipefail
+        # $SCAN_PATHS is split on spaces on purpose
+        npx --yes proskills-cli@latest scan $SCAN_PATHS --min "$SCAN_MIN" --badge | tee "$RUNNER_TEMP/proskills-scan.txt"
+    - name: Job summary
+      if: always()
+      shell: bash
+      run: |
+        f="$RUNNER_TEMP/proskills-scan.txt"
+        if [ -f "$f" ]; then
+          {
+            echo "### Skill scan (ProSkills)"
+            echo
+            echo '```'
+            cat "$f"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi

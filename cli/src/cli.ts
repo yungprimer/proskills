@@ -5,7 +5,7 @@ import { parseArgs } from "node:util";
 import { CliError, fetchCatalog, type Answers, type FetchFn } from "./api.js";
 import { install } from "./install.js";
 import { pickAgents, resolveTargets } from "./paths.js";
-import { DEFAULT_SCAN_DIRS, isFailing, scanDirs } from "./scancmd.js";
+import { DEFAULT_SCAN_DIRS, badgeMarkdown, isFailing, scanDirs } from "./scancmd.js";
 
 export const DEFAULT_BASE = "https://proskills.dev";
 
@@ -15,12 +15,14 @@ Usage
   proskills list [--collection <slug>]
   proskills add <skill-id...> [--agent claude|cursor|codex|gemini|all] [--global]
                 [--order <id>] [--dir <path>] [--force] [--answers file.json]
-  proskills scan [paths...] [--min 80] [--json]
+  proskills scan [paths...] [--min 80] [--json] [--badge]
 
 Options
   --base <url>   Another host (default ${DEFAULT_BASE}, or env PROSKILLS_URL)
   --order <id>   Order id from your receipt (or env PROSKILLS_ORDER)
   --dir <path>   Base folder instead of the current one (home folder with --global)
+  --badge        After a scan, print a README badge snippet using the lowest score
+                 across the scanned skills (with --json: a "badge" field)
   --help         Show this help
   --version      Show the version
 
@@ -43,6 +45,7 @@ const OPTIONS = {
   collection: { type: "string" },
   min: { type: "string" },
   json: { type: "boolean" },
+  badge: { type: "boolean" },
 } as const;
 
 export function parseCli(argv: string[]) {
@@ -153,13 +156,14 @@ export async function run(argv: string[], io: Env): Promise<number> {
       if (!results.length) throw new CliError(explicit ? "No skill folders (containing SKILL.md) found in the given paths." : `No skills found in ${DEFAULT_SCAN_DIRS.join(" or ")}. Pass a path: proskills scan ./my-skill`, 2);
       const failed = results.filter((r) => isFailing(r, min));
       if (values.json) {
-        io.out(JSON.stringify({ min, ok: failed.length === 0, skills: results.map((r) => ({ dir: r.dir.replace(/\\/g, "/"), failed: isFailing(r, min), ...r.report })) }, null, 2));
+        io.out(JSON.stringify({ min, ok: failed.length === 0, ...(values.badge ? { badge: badgeMarkdown(results.map((r) => r.report.score)) } : {}), skills: results.map((r) => ({ dir: r.dir.replace(/\\/g, "/"), failed: isFailing(r, min), ...r.report })) }, null, 2));
       } else {
         for (const { dir, report: r } of results) {
           io.out(`\n${r.grade}  ${String(r.score).padStart(3)}  ${dir.replace(/\\/g, "/")}   spec ${r.pillars.spec} · eff ${r.pillars.efficiency} · clarity ${r.pillars.clarity} · sec ${r.pillars.security}`);
           for (const f of r.findings.filter((f) => f.severity !== "info")) io.out(`     ${f.severity.padEnd(8)} ${f.rule.padEnd(24)} ${f.file ?? ""}${f.line ? ":" + f.line : ""}  ${f.message}`);
         }
         io.out(`\n${results.length} skills scanned, ${failed.length} below the gate (min ${min}, grade F always fails).`);
+        if (values.badge) io.out(`\nREADME badge (lowest score: ${Math.min(...results.map((r) => r.report.score))}):\n${badgeMarkdown(results.map((r) => r.report.score))}`);
       }
       return failed.length ? 1 : 0;
     }

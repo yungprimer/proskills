@@ -34,9 +34,9 @@ Prints a table of skills with price (or `Free`) and scan score.
 
 Paid skill without an order id: the command stops and prints the link to buy it (`https://proskills.dev/library/<collection>`).
 
-### `proskills scan [paths...] [--min 80] [--json]`
+### `proskills scan [paths...] [--min 80] [--json] [--badge]`
 
-Scores skill folders against the Agent Skills spec, token budget, clarity and security. A path is a skill folder (has `SKILL.md`) or a folder of skill folders. Default: `.claude/skills` and `.agents/skills`. Exits `1` when any skill is grade F (any critical finding) or scores under `--min`, `2` on usage errors. Scanning runs locally; nothing is uploaded.
+Scores skill folders against the Agent Skills spec, token budget, clarity and security. A path is a skill folder (has `SKILL.md`) or a folder of skill folders. Default: `.claude/skills` and `.agents/skills`. Exits `1` when any skill is grade F (any critical finding) or scores under `--min`, `2` on usage errors. `--badge` prints a README badge snippet after the scan, using the lowest score across the scanned skills (with `--json` it is a `badge` field instead). Scanning runs locally; nothing is uploaded.
 
 ### Everywhere
 
@@ -60,6 +60,22 @@ jobs:
 ```
 
 Add paths to scan something else: `npx proskills-cli scan ./skills --min 90 --json`.
+
+Or use the GitHub Action from the [public repo](https://github.com/yungprimer/proskills), which also prints the badge in the job summary:
+
+```yaml
+      - uses: yungprimer/proskills@v1
+        with:
+          min: 80
+```
+
+## Badge
+
+`npx proskills-cli scan --badge` prints this for your README (the number is your lowest skill score):
+
+```md
+[![Scanned by ProSkills](https://proskills.dev/badge?score=92)](https://proskills.dev/scan)
+```
 
 ## What it writes, and where
 
